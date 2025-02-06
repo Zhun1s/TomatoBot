@@ -165,39 +165,96 @@ async def delete_task(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Please provide a valid task ID.\nUsage: /delete <task_id>")
 
 ### POMODORO TIMER ###
+NUM_SESSIONS, WORK_TIME, BREAK_TIME = range(3, 6)
 
-async def pomodoro(update: Update, context: CallbackContext) -> None:
+async def pomodoro(update: Update, context: CallbackContext) -> int:
     """Start a Pomodoro session."""
+    global timer_tasks  # Declare timer_tasks as global
     user_id = update.message.from_user.id
-    if len(context.args) != 2:
-        await update.message.reply_text("Usage: /pomodoro <work_minutes> <break_minutes>")
-        return
-    
-    try:
-        work_time = int(context.args[0])
-        break_time = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("Please enter valid numbers for work and break durations.")
-        return
-    
+
     if user_id in timer_tasks:
         await update.message.reply_text("You already have a Pomodoro session running!")
         return
-    
-    await update.message.reply_text(f"🔔 Pomodoro started: {work_time} min work, {break_time} min break.")
+
+    # Ask for number of sessions
+    await update.message.reply_text("How many Pomodoro sessions would you like to complete?")
+    return NUM_SESSIONS
+
+async def num_sessions(update: Update, context: CallbackContext) -> int:
+    """Save the number of sessions and ask for work duration"""
+    try:
+        num_sessions = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number for sessions.")
+        return NUM_SESSIONS
+
+    context.user_data['num_sessions'] = num_sessions
+    await update.message.reply_text("How many minutes will each work session last?")
+    return WORK_TIME
+
+async def work_time(update: Update, context: CallbackContext) -> int:
+    """Save work duration and ask for break duration"""
+    try:
+        work_time = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number for work duration.")
+        return WORK_TIME
+
+    context.user_data['work_time'] = work_time
+    await update.message.reply_text("How many minutes will each break session last?")
+    return BREAK_TIME
+
+async def break_time(update: Update, context: CallbackContext) -> int:
+    """Save break duration and start the Pomodoro timer"""
+    try:
+        break_time = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number for break duration.")
+        return BREAK_TIME
+
+    context.user_data['break_time'] = break_time
+    num_sessions = context.user_data['num_sessions']
+    work_time = context.user_data['work_time']
+    break_time = context.user_data['break_time']
+
+    user_id = update.message.from_user.id  # Define user_id here
+
+    await update.message.reply_text(f"🔔 Pomodoro started: {num_sessions} sessions, {work_time} min work, {break_time} min break.")
     timer_tasks[user_id] = True  # Store active timer
     
-    await asyncio.sleep(work_time * 60)
-    if user_id in timer_tasks:
-        await update.message.reply_text("⏳ Time's up! Take a break now.")
-        await asyncio.sleep(break_time * 60)
+    # Perform the Pomodoro sessions
+    for i in range(num_sessions):
+        await update.message.reply_text(f"Starting session {i + 1}...")
+        await asyncio.sleep(work_time * 60)
+        if user_id in timer_tasks:
+            await update.message.reply_text("⏳ Time's up! Take a break now.")
+            await asyncio.sleep(break_time * 60)
+        if user_id in timer_tasks:
+            await update.message.reply_text("🚀 Break over! Ready for the next session?")
     
     if user_id in timer_tasks:
-        await update.message.reply_text("🚀 Break over! Ready for another session?")
         del timer_tasks[user_id]
+        await update.message.reply_text("All sessions completed! Great job!")
+    
+    return ConversationHandler.END
+
+
+# ConversationHandler for Pomodoro
+pomodoro_handler = ConversationHandler(
+    entry_points=[CommandHandler("pomodoro", pomodoro)],
+    states={
+        NUM_SESSIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, num_sessions)],
+        WORK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, work_time)],
+        BREAK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, break_time)],
+    },
+    fallbacks=[],
+)
+
+
 
 async def stop_pomodoro(update: Update, context: CallbackContext) -> None:
     """Stop an active Pomodoro session."""
+    global timer_tasks  # Declare timer_tasks as global
     user_id = update.message.from_user.id
     if user_id in timer_tasks:
         del timer_tasks[user_id]
@@ -225,12 +282,11 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
+    app.add_handler(pomodoro_handler)  # Add pomodoro handler
     app.add_handler(CommandHandler("tasks", list_tasks))
     app.add_handler(CommandHandler("done", show_mark_done_tasks))
     app.add_handler(CallbackQueryHandler(mark_done_callback, pattern="^done_"))
     app.add_handler(CommandHandler("delete", delete_task))
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("pomodoro", pomodoro))
     app.add_handler(CommandHandler("stop_pomodoro", stop_pomodoro))
 
     print("Task Manager Bot is running...")
