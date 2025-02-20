@@ -21,6 +21,7 @@ TASKS_COLLECTION = "tasks"
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 tasks_collection = db[TASKS_COLLECTION]
+users_collection = db["users"]
 
 TOKEN = "8157321442:AAGTK8QsY5WXFxsZhM53XWbwpYAXcKVLivU"
 
@@ -30,17 +31,48 @@ TITLE, DESCRIPTION, DUE_DATE = range(3)
 timer_tasks = {}
 
 async def start(update: Update, context: CallbackContext) -> None:
-    """Bot welcome message"""
+    """Register user and send a welcome message"""
+    user = update.message.from_user
+    existing_user = users_collection.find_one({"user_id": user.id})
+
+    if not existing_user:
+        users_collection.insert_one({
+            "user_id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "joined_at": datetime.utcnow(),
+        })
+
     await update.message.reply_text(
         "📝 Task Manager Bot\n\n"
         "Available commands:\n"
         "/addtask - Create a new task\n"
         "/tasks - List all your tasks\n"
         "/done - Mark task as completed\n"
-        "/delete - Delete a task\n"
+        "/completed_tasks - List all completed tasks\n"
         "/pomodoro <work_minutes> <break_minutes> - Start a Pomodoro session\n"
         "/stop_pomodoro - Stop an ongoing Pomodoro session"
     )
+
+
+
+### REGISTER USERS ###
+async def register_user_message(update: Update, context: CallbackContext) -> None:
+    """Register a user when they send any message"""
+    user = update.message.from_user
+
+    if not users_collection.find_one({"user_id": user.id}):
+        users_collection.insert_one({
+            "user_id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "joined_at": datetime.utcnow(),
+        })
+
+
+
 
 ### ADD TASK FUNCTIONS ###
 async def add_task(update: Update, context: CallbackContext) -> int:
@@ -149,26 +181,32 @@ async def mark_done_callback(update: Update, context: CallbackContext) -> None:
     else:
         await query.edit_message_text("⚠️ Task not found or already completed.")
 
-### DELETE TASK FUNCTION ###
-async def delete_task(update: Update, context: CallbackContext) -> None:
-    """Delete a task"""
-    try:
-        task_id = context.args[0]
-        result = tasks_collection.delete_one(
-            {"_id": ObjectId(task_id), "user_id": update.message.from_user.id}
-        )
-        if result.deleted_count:
-            await update.message.reply_text("Task deleted successfully!")
-        else:
-            await update.message.reply_text("Task not found.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Please provide a valid task ID.\nUsage: /delete <task_id>")
+async def show_completed_tasks(update: Update, context: CallbackContext) -> None:
+    """Show completed tasks from the database"""
+    user_id = update.message.from_user.id
+    completed_tasks = tasks_collection.find({"user_id": user_id, "status": "completed"}).sort("due_date", 1)
+
+    tasks_list = list(completed_tasks)  # Convert cursor to list to check if empty
+
+    if not tasks_list:
+        await update.message.reply_text("✅ You have no completed tasks!")
+        return
+
+    message = "✅ **Completed Tasks:**\n"
+    for task in tasks_list:
+        message += f"- {task['title']}\n"
+
+    await update.message.reply_text(message)
+
+
+
+
 
 ### POMODORO TIMER ###
 NUM_SESSIONS, WORK_TIME, BREAK_TIME = range(3, 6)
 
 async def pomodoro(update: Update, context: CallbackContext) -> int:
-    """Start a Pomodoro session."""
+    """Start a Pomodoro session after selecting a task."""
     global timer_tasks  # Declare timer_tasks as global
     user_id = update.message.from_user.id
 
@@ -176,8 +214,41 @@ async def pomodoro(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("You already have a Pomodoro session running!")
         return
 
-    # Ask for number of sessions
-    await update.message.reply_text("How many Pomodoro sessions would you like to complete?")
+    # Show available tasks for the user to choose
+    tasks = tasks_collection.find({"user_id": user_id, "status": "pending"}).sort("due_date", 1)
+
+    if not tasks:
+        await update.message.reply_text("You have no pending tasks to choose from!")
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton(f"{task['title']} - {task['due_date'].strftime('%Y-%m-%d')}", callback_data=f"task_{task['_id']}")]
+        for task in tasks
+    ]
+    keyboard.append([InlineKeyboardButton("Other", callback_data="other")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Please choose a task for your Pomodoro session:", reply_markup=reply_markup)
+
+    return TITLE
+
+async def task_selected(update: Update, context: CallbackContext) -> int:
+    """Handle task selection and start Pomodoro timer."""
+    query = update.callback_query
+    await query.answer()
+
+    task_id = query.data.split("_")[1] if query.data != "other" else None
+
+    if task_id:
+        task = tasks_collection.find_one({"_id": ObjectId(task_id), "user_id": update.message.from_user.id})
+        context.user_data['selected_task'] = task
+        await query.edit_message_text(f"Starting Pomodoro session for task: {task['title']}")
+    else:
+        await query.edit_message_text("You selected 'Other'. Please specify the task title:")
+        return TITLE
+
+    # Ask for Pomodoro session details
+    await query.message.reply_text("How many Pomodoro sessions would you like to complete?")
     return NUM_SESSIONS
 
 async def num_sessions(update: Update, context: CallbackContext) -> int:
@@ -216,6 +287,7 @@ async def break_time(update: Update, context: CallbackContext) -> int:
     num_sessions = context.user_data['num_sessions']
     work_time = context.user_data['work_time']
     break_time = context.user_data['break_time']
+    selected_task = context.user_data['selected_task']
 
     user_id = update.message.from_user.id  # Define user_id here
 
@@ -235,26 +307,56 @@ async def break_time(update: Update, context: CallbackContext) -> int:
     if user_id in timer_tasks:
         del timer_tasks[user_id]
         await update.message.reply_text("All sessions completed! Great job!")
+
+        # Ask if task is done
+        await update.message.reply_text(f"Did you complete the task: {selected_task['title']}? (Yes/No)")
+        return "task_done"
     
     return ConversationHandler.END
 
+async def task_done(update: Update, context: CallbackContext) -> int:
+    """Mark task as done or leave it pending"""
+    response = update.message.text.lower()
 
-# ConversationHandler for Pomodoro
+    if 'selected_task' not in context.user_data:
+        await update.message.reply_text("No task selected for completion.")
+        return ConversationHandler.END
+
+    selected_task = context.user_data['selected_task']
+
+    if response == "yes":
+        tasks_collection.update_one(
+            {"_id": ObjectId(selected_task['_id']), "user_id": update.message.from_user.id},
+            {"$set": {"status": "completed"}}
+        )
+        await update.message.reply_text(f"✅ Task '{selected_task['title']}' marked as completed!")
+    else:
+        await update.message.reply_text(f"❌ Task '{selected_task['title']}' left as pending.")
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# Modify conversation handler to include new task-related steps
 pomodoro_handler = ConversationHandler(
     entry_points=[CommandHandler("pomodoro", pomodoro)],
     states={
+        TITLE: [CallbackQueryHandler(task_selected, pattern="^task_.*")],
         NUM_SESSIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, num_sessions)],
         WORK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, work_time)],
         BREAK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, break_time)],
+        "task_done": [MessageHandler(filters.TEXT & ~filters.COMMAND, task_done)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
 )
+
+
 
 
 
 async def stop_pomodoro(update: Update, context: CallbackContext) -> None:
     """Stop an active Pomodoro session."""
-    global timer_tasks  # Declare timer_tasks as global
+    global timer_tasks  
     user_id = update.message.from_user.id
     if user_id in timer_tasks:
         del timer_tasks[user_id]
@@ -281,13 +383,15 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
-    app.add_handler(pomodoro_handler)  # Add pomodoro handler
+    app.add_handler(MessageHandler(filters.ALL, register_user_message))
+    app.add_handler(pomodoro_handler)
     app.add_handler(CommandHandler("tasks", list_tasks))
     app.add_handler(CommandHandler("done", show_mark_done_tasks))
     app.add_handler(CallbackQueryHandler(mark_done_callback, pattern="^done_"))
-    app.add_handler(CommandHandler("delete", delete_task))
+    app.add_handler(CommandHandler("completed_tasks", show_completed_tasks))
     app.add_handler(CommandHandler("stop_pomodoro", stop_pomodoro))
+
+    app.add_handler(conv_handler)
 
     print("Task Manager Bot is running...")
     app.run_polling()
