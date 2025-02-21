@@ -31,18 +31,18 @@ from pymongo import MongoClient
 
 load_dotenv()
 
-# Set up logging
+# SET UP LOGGING
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# MongoDB setup
+# MONGO DB SETUP
 MONGO_URI = os.getenv("MONGO_URI")
 TOKEN = os.getenv("BOT_TOKEN")
 DB_NAME = "telegram_bot"
 
-# Collections
+# COLLECTIONS
 COLLECTIONS = {
     "users": "users",
     "tasks": "tasks",
@@ -54,7 +54,6 @@ COLLECTIONS = {
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 
-# Initialize collections
 users_collection = db[COLLECTIONS["users"]]
 tasks_collection = db[COLLECTIONS["tasks"]]
 pomodoro_collection = db[COLLECTIONS["pomodoro_sessions"]]
@@ -63,7 +62,7 @@ stats_collection = db[COLLECTIONS["statistics"]]
 
 bot = Bot(token=TOKEN)
 
-# Conversation states
+# CONVVERSATION STATES
 (
     TITLE, DESCRIPTION, DUE_DATE,
     NUM_SESSIONS, WORK_TIME, BREAK_TIME,
@@ -74,7 +73,6 @@ bot = Bot(token=TOKEN)
 # Global dictionary for active timers
 active_timers = {}
 
-# Initialize database indexes
 def init_db():
     tasks_collection.create_index([("user_id", 1), ("due_date", 1)])
     pomodoro_collection.create_index([("user_id", 1), ("start_time", -1)])
@@ -83,7 +81,7 @@ def init_db():
 
 init_db()
 
-# Utility functions
+# BASIC FUNCTIONS
 async def get_user_settings(user_id: int) -> dict:
     settings = settings_collection.find_one({"user_id": user_id})
     if not settings:
@@ -130,7 +128,7 @@ async def start(update: Update, context: CallbackContext) -> None:
             "last_updated": datetime.utcnow()
         })
 
-    # Define buttons
+    # BUTTONS
     keyboard = [
         ["/addtask", "/tasks"],
         ["/edit_task", "/done"],
@@ -148,7 +146,7 @@ async def start(update: Update, context: CallbackContext) -> None:
     )
 
 
-# Task management handlers
+# TASK ADDING
 async def add_task(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Enter task title:")
     return TITLE
@@ -206,10 +204,9 @@ async def list_tasks(update: Update, context: CallbackContext) -> None:
 
 
 
-# Define states for conversation handler
 SELECT_TASK, SELECT_FIELD, EDIT_FIELD = range(3)
 
-# Start edit task process
+# TASK EDITING
 async def edit_task(update: Update, context: CallbackContext) -> int:
     """Send a list of tasks to select one for editing."""
     user_id = update.message.from_user.id
@@ -225,12 +222,11 @@ async def edit_task(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Select a task to edit:", reply_markup=reply_markup)
     return SELECT_TASK
 
-# Handle task selection
 async def select_task(update: Update, context: CallbackContext) -> int:
     """Store selected task ID and ask what to edit."""
     query = update.callback_query
     task_id = query.data.split("_")[1]
-    context.user_data["task_id"] = task_id  # Save task ID in user data
+    context.user_data["task_id"] = task_id 
 
     keyboard = [
         [InlineKeyboardButton("✏ Title", callback_data="edit_title")],
@@ -243,12 +239,11 @@ async def select_task(update: Update, context: CallbackContext) -> int:
     await query.edit_message_text("What do you want to edit?", reply_markup=reply_markup)
     return SELECT_FIELD
 
-# Handle field selection
 async def select_field(update: Update, context: CallbackContext) -> int:
     """Ask for new input based on the selected field."""
     query = update.callback_query
     field = query.data.split("_")[1]
-    context.user_data["field"] = field  # Save field type
+    context.user_data["field"] = field 
 
     if field == "title":
         await query.edit_message_text("Enter the new title:")
@@ -259,7 +254,6 @@ async def select_field(update: Update, context: CallbackContext) -> int:
 
     return EDIT_FIELD
 
-# Handle new input and update task
 async def edit_field(update: Update, context: CallbackContext) -> int:
     """Update the selected field in MongoDB."""
     task_id = context.user_data["task_id"]
@@ -284,7 +278,6 @@ async def edit_field(update: Update, context: CallbackContext) -> int:
 
     return ConversationHandler.END
 
-# Cancel the editing process
 async def cancel_edit(update: Update, context: CallbackContext) -> int:
     """Cancel the editing process."""
     await update.message.reply_text("❌ Task editing canceled.")
@@ -293,7 +286,7 @@ async def cancel_edit(update: Update, context: CallbackContext) -> int:
 
 
 
-
+#DONE TASKS
 
 async def show_mark_done_tasks(update: Update, context: CallbackContext) -> None:
     """Handle the /done command."""
@@ -313,23 +306,20 @@ async def mark_done_callback(update: Update, context: CallbackContext) -> None:
     """Handle the callback query for marking a task as done."""
     query = update.callback_query
     user_id = query.from_user.id
-    task_id = query.data.split("_")[1]  # Extract task ID from callback data
+    task_id = query.data.split("_")[1]  
 
-    # Convert task_id to ObjectId
     try:
         task_object_id = ObjectId(task_id)
     except Exception as e:
         await query.answer("Invalid task ID.")
         return
 
-    # Find the task in the database
     task = tasks_collection.find_one({"_id": task_object_id, "user_id": user_id})
     
     if not task:
         await query.answer("Task not found or already completed.")
         return
 
-    # Update task status to "completed"
     tasks_collection.update_one({"_id": task_object_id}, {"$set": {"status": "completed"}})
 
     await query.answer("✅ Task marked as done!")
@@ -338,7 +328,7 @@ async def mark_done_callback(update: Update, context: CallbackContext) -> None:
 
 
 
-# Show completed tasks command
+# TASK HISTORY
 async def show_completed_tasks(update: Update, context: CallbackContext) -> None:
     """Handle the /completed_tasks command."""
     user_id = update.message.from_user.id
@@ -356,7 +346,7 @@ async def show_completed_tasks(update: Update, context: CallbackContext) -> None
             )
         await update.message.reply_text("Your completed tasks:\n" + "\n".join(tasks_list))
 
-# Pomodoro system
+# POMODORO SESSIONS
 async def pomodoro(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
     if user_id in active_timers:
@@ -461,7 +451,6 @@ async def run_pomodoro_cycle(update: Update, context: CallbackContext, user_id: 
 
     try:
         for session in range(session_data["num_sessions"]):
-            # Work session
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=f"Session {session+1}/{session_data['num_sessions']} started! 🎯"
@@ -473,7 +462,6 @@ async def run_pomodoro_cycle(update: Update, context: CallbackContext, user_id: 
                 
             session_data["sessions_completed"] += 1
             
-            # Break session (except after last session)
             if session < session_data["num_sessions"] - 1:
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
@@ -488,7 +476,6 @@ async def run_pomodoro_cycle(update: Update, context: CallbackContext, user_id: 
                     text="Back to work! 💪"
                 )
 
-        # After all sessions
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="🎉 All sessions completed!"
@@ -529,11 +516,9 @@ async def stop_pomodoro(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("❌ No active session to stop!")
         return
 
-    # Cancel the timer task
     if session_data.get("task"):
         session_data["task"].cancel()
     
-    # Save partial session
     pomodoro_collection.insert_one({
         "user_id": user_id,
         "task_id": ObjectId(session_data["task_id"]),
@@ -575,7 +560,7 @@ async def handle_task_completion(update: Update, context: CallbackContext):
 
     context.user_data.clear()
 
-# Statistics command
+# USER STATS
 async def show_stats(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     stats = stats_collection.find_one({"user_id": user_id})
@@ -593,10 +578,10 @@ async def show_stats(update: Update, context: CallbackContext) -> None:
     )
     await update.message.reply_text(message)
 
-# Show Settings Handler
+# SETTINGS
 async def show_settings(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    settings = await get_user_settings(user_id) or {}  # Ensure settings is at least an empty dict
+    settings = await get_user_settings(user_id) or {}  
 
     message = (
         "⚙️ Current Settings:\n"
@@ -612,14 +597,14 @@ async def show_settings(update: Update, context: CallbackContext) -> None:
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# Toggle Notifications Handler
+
 async def toggle_notifications(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
 
     user_id = query.from_user.id
     current_setting = await get_user_settings(user_id)
-    new_value = not current_setting.get("notifications", True)  # Default to True if not set
+    new_value = not current_setting.get("notifications", True)  
 
     settings_collection.update_one(
         {"user_id": user_id},
@@ -632,7 +617,7 @@ async def toggle_notifications(update: Update, context: CallbackContext) -> None
     )
 
 
-# Function to send a Telegram message
+# NOTIFICATIONS
 def send_telegram_message(user_id, task_name, due_time):
     message = f"🔔Reminder: Task '{task_name}' is due at {due_time}!"
     telegram_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -648,7 +633,6 @@ def send_telegram_message(user_id, task_name, due_time):
     else:
         print(f"Failed to send message: {response.text}")
 
-# Function to schedule notifications
 def schedule_notifications():
     while True:
         try:
@@ -678,7 +662,7 @@ def schedule_notifications():
         time.sleep(6000)
 
 
-# Main application setup
+# MAIN
 def main():
     application = Application.builder().token(TOKEN).build()
     
@@ -720,7 +704,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_edit)]
     )
 
-    # Register handlers
+    # HANDLERS
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("tasks", list_tasks))
     application.add_handler(CommandHandler("stats", show_stats))
@@ -739,9 +723,6 @@ def main():
     application.add_handler(edit_task_handler)
 
 
-    
-
-    # Start polling
     application.run_polling()
 
 if __name__ == "__main__":
